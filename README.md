@@ -250,16 +250,22 @@ spreads out on its own.
 ## Development
 
 ```bash
-# unit tests, no AWS and no network
-python3 -m unittest discover -s tests -v
-
-# lint the CloudFormation template
-pip install cfn-lint
-cfn-lint template.yaml
-
-# validate the SAM transform
-sam validate --lint
+make verify        # lint + tests + packaging check. The one command that checks everything.
 ```
+
+Individual targets:
+
+```bash
+make test          # 82 tests, no AWS and no network
+make lint          # cfn-lint the template, shellcheck the scripts, compile the handler
+make validate      # sam validate --lint
+make build         # sam build
+make package-check # assert the built artifact ships what the handler needs at cold start
+make clean         # drop .aws-sam and bytecode
+```
+
+`make help` lists them. `cfn-lint`, `shellcheck` and the SAM CLI are the only tools
+required, and each target tells you which one is missing rather than failing obscurely.
 
 The handler has **zero third-party dependencies**: stdlib plus boto3, which the Lambda
 runtime provides. That is why `sam build` needs no Docker and the deployment package is a
@@ -268,6 +274,7 @@ plain zip.
 Layout:
 
 ```
+Makefile                 make verify, make test, make lint, make build, make clean
 template.yaml            CloudFormation stack (SAM transform)
 src/handler.py           the Lambda, one file, read top to bottom
 src/prompts/
@@ -276,10 +283,11 @@ src/prompts/
 src/config.json          your estate's configuration
 src/config.example.json  a filled-in example estate
 tests/test_triage.py     70 unit + end-to-end tests over the pure logic
-tests/test_template.py   11 tests asserting the template and the handler agree
+tests/test_template.py   12 tests asserting the template and the handler agree
 scripts/set-secrets.sh   create the SSM SecureString parameters
 scripts/deploy.sh        package and deploy without the SAM CLI
 scripts/dry-run.sh       run locally against your account, no Jira writes
+scripts/check_package.py assert the built artifact ships what the handler needs
 docs/                    configuration, Jira setup, architecture
 ```
 

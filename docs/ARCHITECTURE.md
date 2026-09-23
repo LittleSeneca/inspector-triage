@@ -344,27 +344,34 @@ the inference client's request shape, retry behaviour, prose fallback and auth-f
 detection. An `EndToEnd` class stubs AWS, the provider and Jira and calls `lambda_handler`
 directly, so the wiring is covered and not just the pieces.
 
-`tests/test_template.py` holds 11 tests asserting that the CloudFormation template and the
-handler agree: environment variables in both directions, parameter declarations and console
-grouping, every `Ref` resolving, credential paths scoped in the IAM policy, the state bucket
-versioned and private, reserved concurrency pinned to 1, no dead `DEFAULT_CONFIG` keys, and
-the config files using only known keys. These catch three failure modes the other tests
-structurally cannot, because those set the module constants directly rather than going
-through the template: a variable wired up in the template that nothing reads, a variable
-read with no default that the template never sets, and a `Ref` that resolves to nothing.
+`tests/test_template.py` holds 12 tests over the handler's deployment contract: environment
+variables in both directions, parameter declarations and console grouping, every `Ref`
+resolving, credential paths scoped in the IAM policy, the state bucket versioned and
+private, reserved concurrency pinned to 1, no dead `DEFAULT_CONFIG` keys, the config files
+using only known keys, and the handler importing nothing beyond the standard library and
+boto3. That last one is what keeps the no-Docker build and the plain-zip package true, and
+it runs locally now rather than only in CI.
+
+These catch four failure modes the other tests structurally cannot, because those set the
+module constants directly rather than going through the template: a variable wired up in
+the template that nothing reads, a variable read with no default that the template never
+sets, a `Ref` that resolves to nothing, and a dependency that would break the build.
 Requires PyYAML and skips cleanly without it.
 
 Run them with:
 
 ```bash
-python3 -m unittest discover -s tests -v
+make verify    # lint, tests, build, packaging check
+make test      # tests only
 ```
 
-The CI workflow also enforces two things that are easy to break by accident: that
-`handler.py` imports nothing outside the standard library and boto3 (which is what keeps
-the no-Docker build story true), and that every key in the config files exists in
-`DEFAULT_CONFIG` (so a typo in `config.json` fails the build instead of silently doing
-nothing).
+CI runs `make verify` and nothing else, so a green pipeline means the same command is green
+locally, and the other way round.
+
+`scripts/check_package.py` covers the gap the test suite cannot reach: it asserts that the
+built artifact actually ships `handler.py`, `config.json` and both prompt files, that no
+stray bytecode is in it, and that the handler can import and read its prompts from the
+packaged layout with `PYTHONPATH` cleared.
 
 ---
 

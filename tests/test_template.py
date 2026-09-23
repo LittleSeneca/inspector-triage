@@ -1,7 +1,8 @@
-"""The CloudFormation template and the handler have to agree with each other.
+"""The handler's deployment contract: the template, and the dependency surface.
 
-Three failure modes this catches that the other tests structurally cannot,
-because those set the module constants directly rather than going through the
+The other test modules exercise the handler's logic. This one asserts the things
+that decide whether the deployed artifact works at all, and that no other test can
+see because they set module constants directly rather than going through the
 template:
 
 1. A template environment variable the handler never reads: dead config that
@@ -10,6 +11,8 @@ template:
    never sets: a silent failure on the first real invocation.
 3. A Ref in the template that resolves to nothing: a deploy-time failure
    cfn-lint will not catch, because it is not a syntax error.
+4. A third-party import in the handler, which would break the no-Docker build and
+   the plain-zip package.
 
 Requires PyYAML. Skips cleanly when absent, so a bare local run still works.
 """
@@ -170,6 +173,17 @@ class Template(unittest.TestCase):
                     k for k in data if k not in handler.DEFAULT_CONFIG and not k.startswith("_")
                 ]
                 self.assertEqual(unknown, [], f"{name} has keys with no default: {unknown}")
+
+    def test_the_handler_depends_only_on_the_stdlib_and_boto3(self):
+        """This is what keeps `sam build` Docker-free and the package a plain zip."""
+        imported = set()
+        for node in ast.walk(ast.parse(self.source)):
+            if isinstance(node, ast.Import):
+                imported |= {a.name.split(".")[0] for a in node.names}
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                imported.add(node.module.split(".")[0])
+        extra = sorted(imported - set(sys.stdlib_module_names) - {"boto3"})
+        self.assertEqual(extra, [], f"unexpected third-party imports: {extra}")
 
     def test_every_exception_class_has_the_heading_class_description_parses(self):
         """class_description lifts a class body out of standard.md by regex."""
