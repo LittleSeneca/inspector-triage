@@ -8,6 +8,13 @@
 #   BATCH_SIZE=1 ./scripts/dry-run.sh       # just one
 #   AWS_PROFILE=my-readonly ./scripts/dry-run.sh
 #
+# Environment:
+#   STATE_BUCKET   Required. Your stack's state bucket.
+#   AWS_REGION     Default: us-east-1
+#   BATCH_SIZE     Default: 3
+#   REGIONS        Default: $AWS_REGION
+#   REPOS, GITHUB_ORG, JIRA_* , INFERENCE_*   Override the stack defaults.
+#
 # Requires: python3 with boto3, AWS credentials that can read Inspector/ECR/ECS/EC2,
 # read the credential parameters in SSM, and read/write the state bucket.
 #
@@ -20,6 +27,13 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown argument: $1 (try --help)" >&2; exit 2 ;;
+  esac
+done
+
 if ! python3 -c "import boto3" >/dev/null 2>&1; then
   echo "boto3 is not importable. Install it: pip3 install boto3" >&2
   exit 1
@@ -30,6 +44,9 @@ export AWS_REGION="$REGION"
 export AWS_DEFAULT_REGION="$REGION"
 
 # Point these at your stack's values.
+# This script runs the handler from src/. Do not leave .pyc files behind there:
+# `sam build` copies src/ wholesale, so stray bytecode would ship in the package.
+export PYTHONDONTWRITEBYTECODE=1
 export DRY_RUN="true"
 export BATCH_SIZE="${BATCH_SIZE:-3}"
 export REGIONS="${REGIONS:-$REGION}"

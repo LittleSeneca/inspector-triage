@@ -167,7 +167,7 @@ def load_config() -> dict:
     if os.path.exists(path):
         with open(path, encoding="utf-8") as fh:
             cfg = _deep_merge(cfg, json.load(fh))
-    if os.environ.get("CONFIG_JSON"):
+    if os.environ.get("CONFIG_JSON", ""):
         cfg = _deep_merge(cfg, json.loads(os.environ["CONFIG_JSON"]))
     return cfg
 
@@ -212,18 +212,24 @@ BOARD_NAME = os.environ.get("BOARD_NAME", "Vulnerability Triage")
 CREATE_BOARD = os.environ.get("CREATE_BOARD", "true").lower() == "true"
 
 
-def _status_list(env_name: str, default: list) -> list:
-    raw = os.environ.get(env_name, "")
-    if not raw:
-        return list(default)
-    return [s.strip() for s in raw.split(",") if s.strip()]
+def _split(value: str, default: list) -> list:
+    """A comma-separated environment value as a list, or the default when unset.
+
+    Whitespace-only counts as unset: a parameter left as " " should not silently
+    produce an empty list, which would stop cards from ever moving.
+    """
+    items = [s.strip() for s in value.split(",") if s.strip()]
+    return items or list(default)
 
 
 # Statuses the Lambda will move a card *into*. Jira matches these names
 # case-sensitively, so they are kept exactly as they appear in your workflow.
-OPEN_STATUSES = tuple(_status_list("OPEN_STATUSES", ["To Do", "Open", "Backlog"]))
+OPEN_STATUSES = tuple(_split(os.environ.get("OPEN_STATUSES", ""), ["To Do", "Open", "Backlog"]))
 DONE_STATUSES = tuple(
-    _status_list("DONE_STATUSES", ["Done", "Closed", "Resolved", "Won't Do", "Cancelled"])
+    _split(
+        os.environ.get("DONE_STATUSES", ""),
+        ["Done", "Closed", "Resolved", "Won't Do", "Cancelled"],
+    )
 )
 # Lowercased copies, for reading a status back and comparing.
 DONE_STATUSES_LOWER = tuple(s.lower() for s in DONE_STATUSES)

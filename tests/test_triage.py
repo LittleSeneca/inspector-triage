@@ -109,11 +109,9 @@ class Config(unittest.TestCase):
         self.assertIn("To Do", lf.OPEN_STATUSES)
 
     def test_status_lists_can_be_overridden_by_a_comma_separated_env_var(self):
-        with mock.patch.dict(os.environ, {"DONE_STATUSES": "Closed, Resolved , Done"}):
-            self.assertEqual(
-                lf._status_list("DONE_STATUSES", ["ignored"]), ["Closed", "Resolved", "Done"]
-            )
-        self.assertEqual(lf._status_list("NOT_SET_ANYWHERE", ["fallback"]), ["fallback"])
+        self.assertEqual(lf._split("Closed, Resolved , Done", []), ["Closed", "Resolved", "Done"])
+        self.assertEqual(lf._split("", ["fallback"]), ["fallback"])
+        self.assertEqual(lf._split("  ", ["fallback"]), ["fallback"])
 
     def test_prompt_files_load_and_are_joined(self):
         prompt, sha = lf.load_prompt_files()
