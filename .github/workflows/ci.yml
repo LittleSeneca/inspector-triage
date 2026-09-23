@@ -14,8 +14,8 @@ jobs:
     name: Unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - name: Install boto3
@@ -27,8 +27,8 @@ jobs:
     name: Syntax and shell checks
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - name: Byte-compile the handler
@@ -62,12 +62,12 @@ jobs:
     name: CloudFormation template
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - name: Install tooling
-        run: python -m pip install --upgrade pip cfn-lint
+        run: python -m pip install --upgrade pip cfn-lint boto3
       - name: cfn-lint
         run: cfn-lint template.yaml
       - name: Validate the JSON config files parse

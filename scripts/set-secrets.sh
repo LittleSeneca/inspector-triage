@@ -41,9 +41,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for cmd in aws; do
-  command -v "$cmd" >/dev/null 2>&1 || { echo "missing required command: $cmd" >&2; exit 1; }
-done
+command -v aws >/dev/null 2>&1 || { echo "missing required command: aws" >&2; exit 1; }
 
 echo "Region: $REGION"
 if [[ "$DRY_RUN" != "true" ]]; then
