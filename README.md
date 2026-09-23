@@ -275,7 +275,8 @@ src/prompts/
   standard.md            the prioritization standard the model applies
 src/config.json          your estate's configuration
 src/config.example.json  a filled-in example estate
-tests/test_triage.py     62 unit tests over the pure logic
+tests/test_triage.py     70 unit + end-to-end tests over the pure logic
+tests/test_template.py   11 tests asserting the template and the handler agree
 scripts/set-secrets.sh   create the SSM SecureString parameters
 scripts/deploy.sh        package and deploy without the SAM CLI
 scripts/dry-run.sh       run locally against your account, no Jira writes

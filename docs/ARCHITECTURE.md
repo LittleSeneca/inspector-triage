@@ -335,13 +335,24 @@ can act on.
 
 ## 8. Testing
 
-`tests/test_triage.py` holds 64 tests over the pure logic, with no AWS calls and no
+`tests/test_triage.py` holds 70 tests over the pure logic, with no AWS calls and no
 network. They cover consolidation and deployment flags, environment normalisation, host
 class parsing, the diff buckets, evidence-report assembly from canned responses, schema
 validation and citation checking, every guard including its negative cases, risk bands,
 class-description extraction from the standard, credential resolution for both stores, and
 the inference client's request shape, retry behaviour, prose fallback and auth-failure
-detection.
+detection. An `EndToEnd` class stubs AWS, the provider and Jira and calls `lambda_handler`
+directly, so the wiring is covered and not just the pieces.
+
+`tests/test_template.py` holds 11 tests asserting that the CloudFormation template and the
+handler agree: environment variables in both directions, parameter declarations and console
+grouping, every `Ref` resolving, credential paths scoped in the IAM policy, the state bucket
+versioned and private, reserved concurrency pinned to 1, no dead `DEFAULT_CONFIG` keys, and
+the config files using only known keys. These catch three failure modes the other tests
+structurally cannot, because those set the module constants directly rather than going
+through the template: a variable wired up in the template that nothing reads, a variable
+read with no default that the template never sets, and a `Ref` that resolves to nothing.
+Requires PyYAML and skips cleanly without it.
 
 Run them with:
 
