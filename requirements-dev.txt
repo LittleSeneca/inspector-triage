@@ -1,0 +1,15 @@
+# Development and CI dependencies.
+#
+#   pip install -r requirements-dev.txt
+#
+# The Lambda itself has NO third-party dependencies beyond boto3, which the AWS
+# runtime provides. That is what keeps `sam build` Docker-free and the deployment
+# package a plain zip. Nothing in this file ships in the artifact.
+
+boto3>=1.34      # the handler's only runtime dependency, needed locally to import it
+pyyaml>=6.0      # tests/test_template.py parses template.yaml
+cfn-lint>=1.0    # make lint
+
+# Two more tools that are not Python packages, so they are not listed above:
+#   brew install shellcheck      # make lint
+#   brew install aws-sam-cli     # make validate, make build, make package-check

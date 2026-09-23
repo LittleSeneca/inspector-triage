@@ -21,7 +21,8 @@ jobs:
       - name: Install tooling
         run: |
           python -m pip install --upgrade pip
-          python -m pip install boto3 pyyaml cfn-lint aws-sam-cli
+          python -m pip install -r requirements-dev.txt
+          python -m pip install aws-sam-cli
       # One command, the same one a contributor runs. If it is green here it is
       # green locally, and the other way round.
       - name: make verify
