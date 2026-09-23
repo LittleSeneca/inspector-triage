@@ -1,0 +1,86 @@
+{
+  "_comment": "A filled-in example for a fictional estate, to show the shape of every estate-specific key. Copy what you need into src/config.json. See docs/CONFIGURATION.md for the full reference.",
+
+  "environments": ["production", "production-eu", "non-production"],
+  "fallback_environment": "production",
+  "non_production_environments": ["non-production"],
+
+  "environment_tag_map": {
+    "prod": "production",
+    "production": "production",
+    "eu": "production-eu",
+    "prod-eu": "production-eu",
+    "staging": "non-production",
+    "dev": "non-production",
+    "test": "non-production"
+  },
+
+  "region_default_environment": {
+    "us-east-1": "production",
+    "eu-west-1": "production-eu"
+  },
+
+  "source_map": {
+    "ecr:web-api": {
+      "repo": "acme/web-api",
+      "dockerfile": "Dockerfile",
+      "compose": "compose.yml",
+      "manifests": ["requirements.txt", "pyproject.toml"]
+    },
+    "ecr:web-frontend": {
+      "repo": "acme/web-frontend",
+      "dockerfile": "Dockerfile",
+      "manifests": ["package.json", "package-lock.json"]
+    },
+    "ecr:batch-worker": {
+      "repo": "acme/batch-worker",
+      "dockerfile": "docker/worker/Dockerfile",
+      "manifests": ["docker/worker/requirements.txt"]
+    },
+    "ecr:internal-tools": {
+      "repo": "acme/infrastructure",
+      "dockerfile": "docker/internal-tools/Dockerfile",
+      "manifests": ["docker/internal-tools/requirements.txt"]
+    }
+  },
+
+  "ec2_compose_repos": ["web-api"],
+
+  "host_class_notes": {
+    "app": "Amazon Linux 2023. Roles: base, docker, webapp. Runs the web-api compose stack.",
+    "batch": "Amazon Linux 2023. Roles: base, docker, batch. Runs the batch-worker compose stack.",
+    "bastion": "Amazon Linux 2023. Roles: base. Zero security group ingress; reached only over the VPN."
+  },
+
+  "compose_notes": {
+    "app": "web-api on :80, postgres, redis, and a document renderer sidecar.",
+    "batch": "batch-worker plus redis."
+  },
+
+  "lambda_source_repo": "acme/infrastructure",
+  "lambda_manifest_path": "functions/{function}/requirements.txt",
+
+  "package_aliases": {
+    "libssl3": ["openssl", "libssl"],
+    "perl-base": ["perl", "/usr/bin/perl", ".pl"],
+    "imagemagick": ["imagemagick", "convert", "magick"],
+    "libheif": ["libheif", "heif"]
+  },
+
+  "tiers": {
+    "P1": { "sla_days": 7, "jira_priority": "Highest" },
+    "P2": { "sla_days": 30, "jira_priority": "High" },
+    "P3": { "sla_days": 90, "jira_priority": "Medium" }
+  },
+
+  "risk_bands": [[81, "Highest"], [51, "High"], [21, "Medium"], [1, "Low"], [0, "Lowest"]],
+
+  "exception_classes": [
+    "no_fix_available",
+    "unreachable_component",
+    "non_production_only",
+    "third_party_image_awaiting_upstream"
+  ],
+
+  "epss_p1_threshold": 0.1
+}

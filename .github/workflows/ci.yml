@@ -1,0 +1,92 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install boto3
+        run: python -m pip install --upgrade pip boto3
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+  syntax:
+    name: Syntax and shell checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Byte-compile the handler
+        run: python -m py_compile src/handler.py
+      - name: Verify the handler imports with no third-party packages
+        run: |
+          # boto3 is the only import beyond the stdlib. Prove nothing else crept in,
+          # because a stray dependency breaks the no-Docker build story.
+          python - <<'PY'
+          import ast, pathlib, sys
+          tree = ast.parse(pathlib.Path("src/handler.py").read_text())
+          mods = set()
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Import):
+                  mods.update(a.name.split(".")[0] for a in node.names)
+              elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                  mods.add(node.module.split(".")[0])
+          allowed = set(sys.stdlib_module_names) | {"boto3", "handler"}
+          extra = sorted(mods - allowed)
+          if extra:
+              print(f"unexpected third-party imports: {extra}")
+              sys.exit(1)
+          print(f"imports ok: {sorted(mods)}")
+          PY
+      - name: shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck scripts/*.sh
+
+  template:
+    name: CloudFormation template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install tooling
+        run: python -m pip install --upgrade pip cfn-lint
+      - name: cfn-lint
+        run: cfn-lint template.yaml
+      - name: Validate the JSON config files parse
+        run: |
+          python -c "import json; json.load(open('src/config.json'))"
+          python -c "import json; json.load(open('src/config.example.json'))"
+      - name: Every config key used by the handler exists in the defaults
+        run: |
+          python - <<'PY'
+          import json, pathlib, re, sys
+          sys.path.insert(0, "src")
+          import handler
+
+          defaults = handler.DEFAULT_CONFIG
+          for name in ("config.json", "config.example.json"):
+              data = json.loads(pathlib.Path("src", name).read_text())
+              unknown = [k for k in data if k not in defaults and not k.startswith("_")]
+              if unknown:
+                  print(f"{name}: keys not present in DEFAULT_CONFIG: {unknown}")
+                  sys.exit(1)
+              print(f"{name}: {len(data)} keys, all known")
+          PY

@@ -1,0 +1,490 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  inspector-triage: consolidates Amazon Inspector package findings into one record
+  per CVE and package, assesses each against a written environment statement with an
+  LLM, and keeps Jira current. Deploys a single Lambda, an S3 bucket for state, an
+  EventBridge schedule, and the IAM to read your credentials.
+
+  Credentials are read at runtime from SSM Parameter Store SecureString parameters
+  (or from Secrets Manager). CloudFormation cannot create SecureString parameters, so
+  run scripts/set-secrets.sh once before deploying this stack. See README.md.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Credentials (create these first, see scripts/set-secrets.sh)
+        Parameters:
+          - JiraApiKeySecret
+          - InferenceApiKeySecret
+          - GitHubTokenSecret
+      - Label:
+          default: Jira
+        Parameters:
+          - JiraBaseUrl
+          - JiraEmail
+          - JiraProjectKey
+          - JiraIssueType
+          - JiraClassIssueType
+          - JiraBoardId
+          - BoardName
+          - CreateBoard
+          - JiraAcceptedStatus
+          - JiraBlockedStatus
+          - JiraAcceptedResolution
+          - OpenStatuses
+          - DoneStatuses
+          - Assignees
+      - Label:
+          default: Inference provider (any OpenAI-compatible endpoint)
+        Parameters:
+          - InferenceBaseUrl
+          - InferenceModel
+          - InferenceMaxTokens
+      - Label:
+          default: Reachability evidence (optional, but this is where the value is)
+        Parameters:
+          - GitHubOrg
+          - GitHubRepos
+      - Label:
+          default: Scanning and schedule
+        Parameters:
+          - Regions
+          - BatchSize
+          - ScheduleExpression
+          - DryRun
+          - TriageLabel
+          - StateKey
+      - Label:
+          default: Operations
+        Parameters:
+          - LogRetentionDays
+          - EnableAlarm
+          - AlertTopicArn
+
+Parameters:
+  # ---------------------------------------------------------- Credentials ------
+  # These are references, not values. The secret itself lives in SSM (SecureString)
+  # or Secrets Manager and is never part of the stack.
+  JiraApiKeySecret:
+    Type: String
+    Default: /inspector-triage/jira/api-key
+    Description: >
+      SSM parameter path holding the Jira API token. Prefix the reference with "sm:"
+      to read a Secrets Manager secret instead, for example sm:inspector-triage/jira
+    MinLength: 1
+
+  InferenceApiKeySecret:
+    Type: String
+    Default: /inspector-triage/inference/api-key
+    Description: >
+      SSM parameter path holding the inference provider API key. Prefix the reference
+      with "sm:" to read a Secrets Manager secret instead.
+    MinLength: 1
+
+  GitHubTokenSecret:
+    Type: String
+    Default: ""
+    Description: >
+      Optional. SSM parameter path (prefix with "sm:" for Secrets Manager) holding a
+      read-only GitHub token with repository read and code search. Leave empty to run
+      without code-search evidence, in which case reachability comes back unknown for
+      most findings and is treated as reachable.
+
+  # ---------------------------------------------------------------- Jira ------
+  JiraBaseUrl:
+    Type: String
+    Description: Your Jira site, for example https://acme.atlassian.net (no trailing slash).
+    AllowedPattern: "^https://.+[^/]$"
+    ConstraintDescription: Must be an https URL with no trailing slash.
+
+  JiraEmail:
+    Type: String
+    Description: The account email the API token belongs to.
+    AllowedPattern: "^.+@.+$"
+
+  JiraProjectKey:
+    Type: String
+    Description: Project key the triage cards are created in, for example SEC.
+
+  JiraIssueType:
+    Type: String
+    Default: Task
+    Description: Issue type for vulnerability cards.
+
+  JiraClassIssueType:
+    Type: String
+    Default: Epic
+    Description: >
+      Issue type for the standing exception-class issues. Each class becomes one issue
+      and accepted vulnerabilities become its children. Set this to the same value as
+      JiraIssueType if your project has no issue hierarchy.
+
+  JiraBoardId:
+    Type: String
+    Default: ""
+    Description: >
+      Existing board id to use. Leave empty to let the Lambda create a saved filter and
+      a Kanban board on first run (requires Jira Software).
+
+  BoardName:
+    Type: String
+    Default: Vulnerability Triage
+
+  CreateBoard:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Set to false to never create a board or filter.
+
+  JiraAcceptedStatus:
+    Type: String
+    Default: Accepted
+    Description: Status used for accepted vulnerabilities. Falls back to a done status if absent.
+
+  JiraBlockedStatus:
+    Type: String
+    Default: Blocked
+    Description: >
+      Status used for anything with no patch available. Falls back to the accepted status
+      if absent.
+
+  JiraAcceptedResolution:
+    Type: String
+    Default: Declined
+    Description: >
+      Resolution applied when the accepted status is unavailable and the card has to be
+      closed instead.
+
+  OpenStatuses:
+    Type: String
+    Default: "To Do,Open,Backlog"
+    Description: >
+      Comma-separated statuses the Lambda will move an actionable card into, in order of
+      preference. Names must match your workflow exactly.
+
+  DoneStatuses:
+    Type: String
+    Default: "Done,Closed,Resolved,Won't Do,Cancelled"
+    Description: >
+      Comma-separated statuses that count as closed, used to close a card whose finding
+      has gone and to detect a human closing a card while the finding is still active.
+
+  Assignees:
+    Type: String
+    Default: "{}"
+    Description: >
+      JSON map of remediation target prefix to Jira accountId, plus an optional "default".
+      Example: {"default":"5b10ac8d82e05b22cc7d4ef5","ecr:web-api":"5b10ac8d82e05b22cc7d4ef5"}
+
+  # ----------------------------------------------------------- Inference ------
+  InferenceBaseUrl:
+    Type: String
+    Default: https://api.groq.com/openai/v1
+    Description: >
+      Base URL of any OpenAI-compatible API. The tool appends /chat/completions.
+      Examples: https://api.groq.com/openai/v1, https://api.openai.com/v1,
+      https://openrouter.ai/api/v1, http://localhost:11434/v1
+
+  InferenceModel:
+    Type: String
+    Default: openai/gpt-oss-120b
+    Description: Model name. Must support function calling (tool use).
+
+  InferenceMaxTokens:
+    Type: Number
+    Default: 4000
+    MinValue: 512
+    MaxValue: 32000
+
+  # ------------------------------------------------ Reachability evidence ------
+  GitHubOrg:
+    Type: String
+    Default: ""
+    Description: >
+      Organisation to scope code search to. Leave empty to search every repository the
+      token can see.
+
+  GitHubRepos:
+    Type: String
+    Default: ""
+    Description: >
+      Comma-separated owner/repo list to search and to filter results to. Leave empty to
+      skip the repo-scoped code search.
+
+  # ------------------------------------------------- Scanning and schedule ------
+  Regions:
+    Type: String
+    Default: ""
+    Description: >
+      Comma-separated regions to pull Inspector findings from. Leave empty to use the
+      stack's own region. List every region where you have Inspector enabled.
+
+  BatchSize:
+    Type: Number
+    Default: 15
+    MinValue: 1
+    MaxValue: 200
+    Description: >
+      Maximum assessments per run. Higher backfills faster and costs more per hour.
+
+  ScheduleExpression:
+    Type: String
+    Default: rate(1 hour)
+    Description: EventBridge schedule expression.
+
+  DryRun:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      When true the Lambda assesses and logs only, performs no Jira writes, and persists
+      state under dry-run/ in the bucket. It ships defaulting to true on purpose: read a
+      run's decisions in CloudWatch before you let it write to Jira.
+
+  TriageLabel:
+    Type: String
+    Default: inspector-triage
+    Description: Jira label prefix on every issue this tool creates. Also the idempotency key.
+
+  StateKey:
+    Type: String
+    Default: state.json
+
+  # ----------------------------------------------------------- Operations ------
+  LogRetentionDays:
+    Type: Number
+    Default: 365
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+
+  EnableAlarm:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+
+  AlertTopicArn:
+    Type: String
+    Default: ""
+    Description: Optional SNS topic ARN for the error alarm. Leave empty for an alarm with no actions.
+
+Conditions:
+  HasRegions: !Not [!Equals [!Ref Regions, ""]]
+  HasGitHubToken: !Not [!Equals [!Ref GitHubTokenSecret, ""]]
+  HasAlertTopic: !Not [!Equals [!Ref AlertTopicArn, ""]]
+  MakeAlarm: !Equals [!Ref EnableAlarm, "true"]
+
+Resources:
+  # --------------------------------------------------------------- State -------
+  # One JSON object holding every record, assessment, and Jira key. Versioned, so a
+  # full history of decisions stays recoverable for audit. Retained on stack delete.
+  StateBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-noncurrent-state
+            Status: Enabled
+            NoncurrentVersionExpiration:
+              NoncurrentDays: 400
+      Tags:
+        - Key: Purpose
+          Value: inspector-triage
+
+  # ----------------------------------------------------------------- IAM -------
+  TriageRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: inspector-triage
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Inspector, ECR, ECS and EC2 read actions used for consolidation and
+              # deployment resolution. None of these support resource-level scoping,
+              # so this statement is necessarily on "*". It grants no write access.
+              - Sid: ReadFindingsAndDeploymentState
+                Effect: Allow
+                Action:
+                  - inspector2:ListFindings
+                  - inspector2:ListCoverage
+                  - inspector2:BatchGetAccountStatus
+                  - ec2:DescribeInstances
+                  - ec2:DescribeTags
+                  - ec2:DescribeImages
+                  - ecr:DescribeImages
+                  - ecr:DescribeRepositories
+                  - ecr:BatchGetImage
+                  - ecs:ListClusters
+                  - ecs:ListServices
+                  - ecs:DescribeServices
+                  - ecs:DescribeTaskDefinition
+                Resource: "*"
+              - Sid: ReadCredentialsFromParameterStore
+                Effect: Allow
+                Action: ssm:GetParameter
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${JiraApiKeySecret}"
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${InferenceApiKeySecret}"
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${GitHubTokenSecret}"
+              # Only needed if you point a credential reference at a Secrets Manager
+              # secret. Scoped to the inspector-triage namespace; widen it if you
+              # reference a secret outside that prefix.
+              - Sid: ReadCredentialsFromSecretsManager
+                Effect: Allow
+                Action: secretsmanager:GetSecretValue
+                Resource: !Sub "arn:${AWS::Partition}:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:inspector-triage/*"
+              - Sid: ListStateBucket
+                Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt StateBucket.Arn
+              - Sid: ReadWriteStateObjects
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "${StateBucket.Arn}/*"
+              - Sid: Logs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/${AWS::StackName}-triage:*"
+      Tags:
+        - Key: Purpose
+          Value: inspector-triage
+
+  # -------------------------------------------------------------- Lambda -------
+  TriageFunction:
+    Type: AWS::Serverless::Function
+    # The log group is created explicitly so retention is controlled and so the
+    # function never races Lambda's own log-group auto-creation.
+    DependsOn: TriageLogGroup
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-triage"
+      Description: Consolidate Amazon Inspector findings, assess them with an LLM, and keep Jira current.
+      CodeUri: src/
+      Handler: handler.lambda_handler
+      Runtime: python3.13
+      Architectures: [arm64]
+      MemorySize: 512
+      Timeout: 900
+      Role: !GetAtt TriageRole.Arn
+      # State is read-modify-write on a single object. One run at a time, always.
+      ReservedConcurrentExecutions: 1
+      Environment:
+        Variables:
+          REGIONS: !If [HasRegions, !Ref Regions, !Ref "AWS::Region"]
+          REPOS: !Ref GitHubRepos
+          GITHUB_ORG: !Ref GitHubOrg
+          BATCH_SIZE: !Ref BatchSize
+          STATE_BUCKET: !Ref StateBucket
+          STATE_KEY: !Ref StateKey
+          TRIAGE_LABEL: !Ref TriageLabel
+          JIRA_BASE_URL: !Ref JiraBaseUrl
+          JIRA_EMAIL: !Ref JiraEmail
+          JIRA_PROJECT_KEY: !Ref JiraProjectKey
+          JIRA_ISSUE_TYPE: !Ref JiraIssueType
+          JIRA_CLASS_ISSUE_TYPE: !Ref JiraClassIssueType
+          JIRA_BOARD_ID: !Ref JiraBoardId
+          BOARD_NAME: !Ref BoardName
+          CREATE_BOARD: !Ref CreateBoard
+          ACCEPTED_STATUS: !Ref JiraAcceptedStatus
+          BLOCKED_STATUS: !Ref JiraBlockedStatus
+          ACCEPTED_RESOLUTION: !Ref JiraAcceptedResolution
+          OPEN_STATUSES: !Ref OpenStatuses
+          DONE_STATUSES: !Ref DoneStatuses
+          ASSIGNEES: !Ref Assignees
+          INFERENCE_BASE_URL: !Ref InferenceBaseUrl
+          INFERENCE_MODEL: !Ref InferenceModel
+          INFERENCE_MAX_TOKENS: !Ref InferenceMaxTokens
+          JIRA_API_KEY_SECRET: !Ref JiraApiKeySecret
+          INFERENCE_API_KEY_SECRET: !Ref InferenceApiKeySecret
+          GITHUB_TOKEN_SECRET: !Ref GitHubTokenSecret
+          DRY_RUN: !Ref DryRun
+      Events:
+        Schedule:
+          Type: Schedule
+          Properties:
+            Name: !Sub "${AWS::StackName}-triage"
+            Schedule: !Ref ScheduleExpression
+            Description: Scheduled inspector-triage run
+            Enabled: true
+
+  TriageLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${AWS::StackName}-triage"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # -------------------------------------------------------------- Alarm --------
+  TriageErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: MakeAlarm
+    Properties:
+      AlarmName: !Sub "${AWS::StackName}-triage-errors"
+      AlarmDescription: inspector-triage raised an unhandled error
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref TriageFunction
+      Statistic: Sum
+      Period: 3600
+      EvaluationPeriods: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Threshold: 1
+      TreatMissingData: notBreaching
+      AlarmActions: !If [HasAlertTopic, [!Ref AlertTopicArn], !Ref "AWS::NoValue"]
+
+Outputs:
+  FunctionName:
+    Description: The triage Lambda function name.
+    Value: !Ref TriageFunction
+
+  StateBucketName:
+    Description: S3 bucket holding state.json, the versioned decision history.
+    Value: !Ref StateBucket
+
+  ScheduleRuleName:
+    Description: EventBridge rule that triggers the function.
+    Value: !Sub "${AWS::StackName}-triage"
+
+  LogGroupName:
+    Description: CloudWatch log group.
+    Value: !Ref TriageLogGroup
+
+  CredentialReferences:
+    Description: >
+      Credential references in use. Rotate the secret in the store, not in this stack.
+    Value: !Sub
+      - "jira=${Jira} inference=${Inference} github=${Github}"
+      - Jira: !Ref JiraApiKeySecret
+        Inference: !Ref InferenceApiKeySecret
+        Github: !If [HasGitHubToken, !Ref GitHubTokenSecret, "(none)"]
+
+  TestInvocation:
+    Description: >
+      The stack ships with DryRun=true. Invoke once and read the decisions in CloudWatch
+      before switching DryRun to false.
+    Value: !Sub "aws lambda invoke --function-name ${TriageFunction} --payload '{}' --cli-binary-format raw-in-base64-out /dev/stdout"

@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# SAM / CloudFormation packaging artifacts
+.aws-sam/
+.packaged.yaml
+packaged.yaml
+inspector-triage.zip
+
+# macOS
+.DS_Store
+
+# Local overrides. src/config.json is meant to be committed with your estate in it
+# if you fork this; if you would rather keep your estate private, ignore it here.
+# src/config.json

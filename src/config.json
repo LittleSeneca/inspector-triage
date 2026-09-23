@@ -1,0 +1,18 @@
+{
+  "_comment": "Estate-specific configuration. Everything here is deep-merged over the defaults in src/handler.py, so you only need to state what differs. See docs/CONFIGURATION.md for every key, and config.example.json for a filled-in estate.",
+
+  "environments": ["production", "non-production"],
+  "fallback_environment": "production",
+  "non_production_environments": ["non-production"],
+  "region_default_environment": {},
+
+  "source_map": {},
+  "ec2_compose_repos": [],
+  "host_class_notes": {},
+  "compose_notes": {},
+
+  "lambda_source_repo": "",
+  "lambda_manifest_path": "functions/{function}/requirements.txt",
+
+  "package_aliases": {}
+}
